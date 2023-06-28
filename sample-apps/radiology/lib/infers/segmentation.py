@@ -10,7 +10,7 @@
 # limitations under the License.
 
 from typing import Callable, Sequence
-import os
+
 from monai.inferers import Inferer, SlidingWindowInferer
 from monai.transforms import (
     Activationsd,

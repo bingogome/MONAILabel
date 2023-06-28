@@ -18,7 +18,6 @@ from monai.config import KeysCollection, NdarrayOrTensor
 from monai.transforms import CropForeground, GaussianSmooth, Randomizable, Resize, ScaleIntensity, SpatialCrop
 from monai.transforms.transform import MapTransform, Transform
 from skimage import transform
-from lib.segment_anything import SamPredictor, sam_model_registry
 from lib.segment_anything.utils.transforms import ResizeLongestSide
 
 logger = logging.getLogger(__name__)

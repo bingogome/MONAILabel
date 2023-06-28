@@ -7,11 +7,11 @@
 import numpy as np
 import torch
 
-from segment_anything.modeling import Sam
+from lib.segment_anything.modeling import Sam
 
 from typing import Optional, Tuple
 
-from .utils.transforms import ResizeLongestSide
+from lib.segment_anything.utils.transforms import ResizeLongestSide
 
 
 class SamPredictor:

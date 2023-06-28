@@ -8,7 +8,7 @@ from pathlib import Path
 import urllib.request
 import torch
 
-from .modeling import (
+from lib.segment_anything.modeling import (
     ImageEncoderViT,
     MaskDecoder,
     PromptEncoder,

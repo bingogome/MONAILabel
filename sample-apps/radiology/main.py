@@ -15,6 +15,7 @@ import os
 from typing import Dict
 
 import lib.configs
+from lib.configs.sam_embeddings import SAMEmbeddings
 from lib.activelearning import Last
 from lib.infers.deepgrow_pipeline import InferDeepgrowPipeline
 from lib.infers.vertebra_pipeline import InferVertebraPipeline
@@ -78,10 +79,11 @@ class MyApp(MONAILabelApp):
             exit(-1)
 
         # Use Heuristic Planner to determine target spacing and spatial size based on dataset+gpu
-        spatial_size = json.loads(conf.get("spatial_size", "[48, 48, 32]"))
+        spatial_size = json.loads(conf.get("spatial_size", "[256, 256, 256]"))
         target_spacing = json.loads(conf.get("target_spacing", "[1.0, 1.0, 1.0]"))
         self.heuristic_planner = strtobool(conf.get("heuristic_planner", "false"))
         self.planner = HeuristicPlanner(spatial_size=spatial_size, target_spacing=target_spacing)
+        self.sam_embeddings = SAMEmbeddings(image_size=spatial_size[0], model_type='vit_b', checkpoint=os.path.join(app_dir, 'model/sam'))
 
         # app models
         self.models: Dict[str, TaskConfig] = {}
@@ -111,6 +113,8 @@ class MyApp(MONAILabelApp):
         datastore = super().init_datastore()
         if self.heuristic_planner:
             self.planner.run(datastore)
+        # Create SAM embeddings
+        self.sam_embeddings.run(datastore, label_id=17)
         return datastore
 
     def init_infers(self) -> Dict[str, InferTask]:
@@ -283,11 +287,11 @@ def main():
     )
 
     home = str(Path.home())
-    studies = f"{home}/Dataset/Radiology"
+    studies = "/home/andres/Downloads/sam-dataset/monailabel/"
 
     parser = argparse.ArgumentParser()
     parser.add_argument("-s", "--studies", default=studies)
-    parser.add_argument("-m", "--model", default="segmentation_spleen")
+    parser.add_argument("-m", "--model", default="zero_shot_sam_2d")
     parser.add_argument("-t", "--test", default="infer", choices=("train", "infer"))
     args = parser.parse_args()
 
@@ -308,7 +312,10 @@ def main():
 
         # Run on all devices
         for device in device_list():
-            res = app.infer(request={"model": args.model, "image": image_id, "device": device})
+            # res = app.infer(request={"model": args.model, "image": image_id, "device": device})
+            res = app.infer(
+                request={"model": args.model, "image": image_id, "device": device, "labelSAM": [[40, 92, 234]],
+                         "background": [], })
             # res = app.infer(
             #     request={"model": "vertebra_pipeline", "image": image_id, "device": device, "slicer": False}
             # )

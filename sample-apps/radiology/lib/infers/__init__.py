@@ -10,6 +10,7 @@
 # limitations under the License.
 
 from .deepedit import DeepEdit
+from .zero_shot_sam_2D import ZeroShotSam2D
 from .deepgrow import Deepgrow
 from .localization_spine import LocalizationSpine
 from .localization_vertebra import LocalizationVertebra

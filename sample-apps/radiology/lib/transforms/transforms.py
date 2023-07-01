@@ -8,15 +8,20 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from __future__ import annotations
+
 import copy
 import logging
 from typing import Dict, Hashable, Mapping
+import os
 
 import numpy as np
 import torch
 from monai.config import KeysCollection, NdarrayOrTensor
 from monai.transforms import CropForeground, GaussianSmooth, Randomizable, Resize, ScaleIntensity, SpatialCrop
 from monai.transforms.transform import MapTransform, Transform
+from skimage import transform
+from lib.segment_anything.utils.transforms import ResizeLongestSide
 
 logger = logging.getLogger(__name__)
 
@@ -504,4 +509,124 @@ class CacheObjectd(MapTransform):
             cache_key = f"{key}_cached"
             if d.get(cache_key) is None:
                 d[cache_key] = copy.deepcopy(d[key])
+        return d
+
+
+class SAMTransform(MapTransform):
+    def __init__(self, keys: KeysCollection, sam_model=None, device='cuda:0', image_size=256, allow_missing_keys: bool = False):
+        """
+        Applying preprocessing using SAM model
+
+        Args:
+            keys: The ``keys`` parameter will be used to get and set the actual data item to transform
+            sam_model = path to sam model weights
+            device = device used to create 2D images
+            image_size: image size
+        """
+        super().__init__(keys, allow_missing_keys)
+        self.image_size = image_size
+        self.device = device
+        self.sam_model = sam_model
+
+    def _preprocess_img(self, image_data):
+        imgs = []
+        img_embeddings = []
+        # nii preprocess start
+        lower_bound = -500
+        upper_bound = 1000
+        image_data_pre = np.clip(image_data, lower_bound, upper_bound)
+        image_data_pre = (image_data_pre - np.min(image_data_pre)) / (
+                    np.max(image_data_pre) - np.min(image_data_pre)) * 255.0
+        image_data_pre[image_data == 0] = 0
+        image_data_pre = np.uint8(image_data_pre)
+
+        z_index, _, _ = np.where(image_data > 0)
+        z_min, z_max = np.min(z_index), np.max(z_index)
+
+        for i in range(z_min, z_max):
+            gt_slice_i = image_data[i, :, :]
+            gt_slice_i = transform.resize(gt_slice_i, (self.image_size, self.image_size), order=0, preserve_range=True,
+                                          mode='constant', anti_aliasing=True)
+            # resize img_slice_i to 256x256
+            img_slice_i = transform.resize(image_data_pre[i, :, :], (self.image_size, self.image_size), order=3,
+                                           preserve_range=True, mode='constant', anti_aliasing=True)
+            # convert to three channels
+            img_slice_i = np.uint8(np.repeat(img_slice_i[:, :, None], 3, axis=-1))
+            assert len(img_slice_i.shape) == 3 and img_slice_i.shape[2] == 3, 'image should be 3 channels'
+            assert img_slice_i.shape[0] == gt_slice_i.shape[0] and img_slice_i.shape[1] == gt_slice_i.shape[
+                1], 'image and ground truth should have the same size'
+            imgs.append(img_slice_i)
+            if self.sam_model is not None:
+                sam_transform = ResizeLongestSide(self.sam_model.image_encoder.img_size)
+                resize_img = sam_transform.apply_image(img_slice_i)
+                # resized_shapes.append(resize_img.shape[:2])
+                resize_img_tensor = torch.as_tensor(resize_img.transpose(2, 0, 1)).to(self.device)
+                # model input: (1, 3, 1024, 1024)
+                input_image = self.sam_model.preprocess(resize_img_tensor[None, :, :, :])  # (1, 3, 1024, 1024)
+                assert input_image.shape == (1, 3, self.sam_model.image_encoder.img_size,
+                                             self.sam_model.image_encoder.img_size), 'input image should be resized to 1024*1024'
+                with torch.no_grad():
+                    embedding = self.sam_model.image_encoder(input_image)
+                    img_embeddings.append(embedding.cpu().numpy()[0])
+
+        if len(imgs) > 1:
+            imgs = np.stack(imgs, axis=0)  # (n, 256, 256, 3)
+            img_embeddings = np.stack(img_embeddings, axis=0)  # (n, 1, 256, 64, 64)
+
+        return imgs, img_embeddings
+
+    def __call__(self, data):
+        d: Dict = dict(data)
+        # For image array, depth should be the first axis: (depth, width, height)
+        image_data = d['image'].array[0]
+        image_data = np.swapaxes(image_data, 0, -1)
+        imgs, img_embeddings = self._preprocess_img(image_data=image_data)
+        d['img_embeddings'] = img_embeddings
+        d['resized_imgs'] = imgs
+        return d
+
+class ToCheck(MapTransform):
+    """
+    Check data dictionary
+    """
+
+    def __call__(self, data):
+        d: Dict = dict(data)
+        print('This is ToCheck transform')
+        return d
+
+class LoadEmbeddings(MapTransform):
+    """
+    Load embeddings
+    """
+
+    def __call__(self, data):
+        d: Dict = dict(data)
+        path, file = os.path.split(data['image_path'])
+        name = file.split('.')[0]
+        for view in ['axial', 'sagittal', 'coronal']:
+            np_file = np.load(os.path.join(path, 'embeddings', name + f'_{view}.npz'))
+            d[f'img_embeddings_{view}'] = np_file['img_embeddings']
+        return d
+
+class ConvertToVolume(MapTransform):
+    """
+    Convert from 2D images to 3D volume
+    """
+
+    def __call__(self, data):
+        d: Dict = dict(data)
+        return d
+
+class ReadPrompts(MapTransform):
+    """
+    Compute embeddings for prompts
+    """
+
+    def __init__(self, keys: KeysCollection, label_names=None):
+        super().__init__(keys)
+        self.label_names = label_names
+    def __call__(self, data):
+        d: Dict = dict(data)
+        logger.info(f'These are the clicks: {d["labelSAM"][0]}')
         return d

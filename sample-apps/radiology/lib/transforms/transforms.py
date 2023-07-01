@@ -8,9 +8,12 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from __future__ import annotations
+
 import copy
 import logging
 from typing import Dict, Hashable, Mapping
+import os
 
 import numpy as np
 import torch
@@ -589,5 +592,41 @@ class ToCheck(MapTransform):
 
     def __call__(self, data):
         d: Dict = dict(data)
-        print('This is d')
+        print('This is ToCheck transform')
+        return d
+
+class LoadEmbeddings(MapTransform):
+    """
+    Load embeddings
+    """
+
+    def __call__(self, data):
+        d: Dict = dict(data)
+        path, file = os.path.split(data['image_path'])
+        name = file.split('.')[0]
+        for view in ['axial', 'sagittal', 'coronal']:
+            np_file = np.load(os.path.join(path, 'embeddings', name + f'_{view}.npz'))
+            d[f'img_embeddings_{view}'] = np_file['img_embeddings']
+        return d
+
+class ConvertToVolume(MapTransform):
+    """
+    Convert from 2D images to 3D volume
+    """
+
+    def __call__(self, data):
+        d: Dict = dict(data)
+        return d
+
+class ReadPrompts(MapTransform):
+    """
+    Compute embeddings for prompts
+    """
+
+    def __init__(self, keys: KeysCollection, label_names=None):
+        super().__init__(keys)
+        self.label_names = label_names
+    def __call__(self, data):
+        d: Dict = dict(data)
+        logger.info(f'These are the clicks: {d["labelSAM"][0]}')
         return d

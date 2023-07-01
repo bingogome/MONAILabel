@@ -56,66 +56,38 @@ class ZeroShotSam2D(TaskConfig):
             download_file(url, self.path[0])
 
         self.target_spacing = (1.0, 1.0, 1.0)  # target space for image
-        self.spatial_size = (128, 128, 128)  # train input size
+        self.spatial_size = (256, 256, 256)  # train input size
 
         # Network
-        self.network = (
-            UNETR(
-                spatial_dims=3,
-                in_channels=len(self.labels) + self.number_intensity_ch,
-                out_channels=len(self.labels),
-                img_size=self.spatial_size,
-                feature_size=64,
-                hidden_size=1536,
-                mlp_dim=3072,
-                num_heads=48,
-                pos_embed="conv",
-                norm_name="instance",
-                res_block=True,
-            )
-            if network == "unetr"
-            else DynUNet(
-                spatial_dims=3,
-                in_channels=len(self.labels) + self.number_intensity_ch,
-                out_channels=len(self.labels),
-                kernel_size=[3, 3, 3, 3, 3, 3],
-                strides=[1, 2, 2, 2, 2, [2, 2, 1]],
-                upsample_kernel_size=[2, 2, 2, 2, [2, 2, 1]],
-                norm_name="instance",
-                deep_supervision=False,
-                res_block=True,
-            )
-        )
+        self.network = None
 
-        self.network_with_dropout = (
-            UNETR(
-                spatial_dims=3,
-                in_channels=len(self.labels) + self.number_intensity_ch,
-                out_channels=len(self.labels),
-                img_size=self.spatial_size,
-                feature_size=64,
-                hidden_size=1536,
-                mlp_dim=3072,
-                num_heads=48,
-                pos_embed="conv",
-                norm_name="instance",
-                res_block=True,
-                dropout_rate=0.2,
-            )
-            if network == "unetr"
-            else DynUNet(
-                spatial_dims=3,
-                in_channels=len(self.labels) + self.number_intensity_ch,
-                out_channels=len(self.labels),
-                kernel_size=[3, 3, 3, 3, 3, 3],
-                strides=[1, 2, 2, 2, 2, [2, 2, 1]],
-                upsample_kernel_size=[2, 2, 2, 2, [2, 2, 1]],
-                norm_name="instance",
-                deep_supervision=False,
-                res_block=True,
-                dropout=0.2,
-            )
-        )
+        # self.network = (
+        #     UNETR(
+        #         spatial_dims=3,
+        #         in_channels=len(self.labels) + self.number_intensity_ch,
+        #         out_channels=len(self.labels),
+        #         img_size=self.spatial_size,
+        #         feature_size=64,
+        #         hidden_size=1536,
+        #         mlp_dim=3072,
+        #         num_heads=48,
+        #         pos_embed="conv",
+        #         norm_name="instance",
+        #         res_block=True,
+        #     )
+        #     if network == "unetr"
+        #     else DynUNet(
+        #         spatial_dims=3,
+        #         in_channels=len(self.labels) + self.number_intensity_ch,
+        #         out_channels=len(self.labels),
+        #         kernel_size=[3, 3, 3, 3, 3, 3],
+        #         strides=[1, 2, 2, 2, 2, [2, 2, 1]],
+        #         upsample_kernel_size=[2, 2, 2, 2, [2, 2, 1]],
+        #         norm_name="instance",
+        #         deep_supervision=False,
+        #         res_block=True,
+        #     )
+        # )
 
         # Others
         self.epistemic_enabled = strtobool(conf.get("epistemic_enabled", "false"))

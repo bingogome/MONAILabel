@@ -31,7 +31,7 @@ from monailabel.interfaces.tasks.infer_v2 import InferType
 from monailabel.tasks.infer.basic_infer import BasicInferTask
 from monailabel.transform.post import Restored
 from lib.transforms.transforms import SAMTransform, ToCheck, LoadEmbeddings, ConvertToVolume, ReadPrompts
-from lib.segment_anything import sam_model_registry
+from lib.segment_anything import sam_model_registry, SamPredictor
 
 # from lib.segment_anything import SamPredictor
 
@@ -99,38 +99,28 @@ class ZeroShotSam2D(BasicInferTask):
         logger.info(f"Inferer:: {device} => {inferer.__class__.__name__} => {inferer.__dict__}")
 
         sam_model = self._get_network(device, data)
+        predictor = SamPredictor(sam_model)
 
-        # # Is this the way to compute the torch point??
-        # points = data.get('labelSAM', [])
-        # if len(points) > 0:
-        #     point_torch = torch.as_tensor(data['labelSAM'][0][:2], dtype=torch.float, device=device)
-        #     point_torch = point_torch.unsqueeze(0)
-        #     point_torch = point_torch.unsqueeze(0)
+        # TODO: replace hardcode
+        input_point = np.array([[200, 100]])
+        input_label = np.array([1])
+        input_size = (256,256)
+        original_size = (256,256)
 
-        sparse_embeddings, dense_embeddings = sam_model.prompt_encoder(
-            points=(torch.randint(low=0, high=1024, size=(1, 5, 2), dtype=torch.float, device=device),
-                    torch.randint(low=0, high=4, size=(1, 5), dtype=torch.float, device=device)),
-            boxes=None,
-            masks=None,
-        )
-
+        # ``is_image_set'', ``input_size'', ``original_size'' have to be overriden to directly use embedings instead of images
+        predictor.is_image_set = True
+        predictor.input_size = input_size
+        predictor.original_size = original_size
         img_embeddings = torch.as_tensor(data['img_embeddings_axial']).to(device)
-        pred, _ = sam_model.mask_decoder(
-            image_embeddings=img_embeddings,  # (B, 256, 64, 64)
-            image_pe=sam_model.prompt_encoder.get_dense_pe(),  # (1, 256, 64, 64)
-            sparse_prompt_embeddings=sparse_embeddings,  # (B, 2, 256)
-            dense_prompt_embeddings=dense_embeddings,  # (B, 256, 64, 64)
-            multimask_output=False,
-        )
-        pred = torch.sigmoid(pred)
-        pred = pred.detach().cpu().numpy().squeeze()
-        pred = (pred > 0.5).astype(np.uint8)
-        pred = np.swapaxes(pred, 0, -1)
 
-        data['pred'] = pred[None]
-
-        # import matplotlib.image
-        # matplotlib.image.imsave('/home/andres/Downloads/output.png', pred)
+        # SAM uses ``features'' attribute, the same as embeddings
+        predictor.features = img_embeddings
+        masks, scores, logits = self.predictor.predict( \
+            point_coords=input_point, \
+            point_labels=input_label, \
+            multimask_output=True )
+        
+        data['pred'] = masks[0]
 
         return data
 

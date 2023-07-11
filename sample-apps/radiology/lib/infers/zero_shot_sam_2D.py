@@ -20,7 +20,7 @@ from monai.transforms import (
     AsDiscreted,
     EnsureTyped,
     SqueezeDimd,
-    ToNumpyd, LoadImaged, Rotate90d,
+    ToNumpyd, LoadImaged, Rotate90d, EnsureChannelFirstd,
 )
 
 import torch
@@ -102,10 +102,38 @@ class ZeroShotSam2D(BasicInferTask):
         predictor = SamPredictor(sam_model)
 
         # TODO: replace hardcode
-        input_point = np.array([[200, 100]])
-        input_label = np.array([1])
-        input_size = (256,256)
-        original_size = (256,256)
+        # input_point = np.array([[60, 50]])
+        # input_label = np.array([1])
+        # input_size = (256, 256)
+        # original_size = (256, 256)
+
+        input_size = (self.spatial_size[0], self.spatial_size[1])
+        original_size = (self.spatial_size[0], self.spatial_size[1])  # (data['image'].shape[0], data['image'].shape[1])
+
+        foreground_points = data.get('labelSAM', [])
+        background_points = data.get('background', [])
+        foreground_points = [i[:2] for i in foreground_points]
+        background_points = [i[:2] for i in background_points]
+
+        # Rescaling the points according the input size
+        for idx, point in enumerate(foreground_points):
+            foreground_points[idx][0] = int(point[0] * input_size[0] / data['image'].shape[0])
+            foreground_points[idx][1] = int(point[1] * input_size[1] / data['image'].shape[1])
+
+        for idx, point in enumerate(background_points):
+            background_points[idx][0] = int(point[0] * input_size[0] / data['image'].shape[0])
+            background_points[idx][1] = int(point[1] * input_size[1] / data['image'].shape[1])
+
+        input_point = [fore_point for fore_point in foreground_points]
+        input_point.extend([back_point for back_point in background_points])
+        input_point = np.array(input_point)
+
+        # Assigning label index
+        input_label = [1 for _ in foreground_points]
+        input_label.extend([0 for _ in background_points])
+        input_label = np.array(input_label)
+
+        output_mask = np.zeros((input_size[0], input_size[1], data['image'].shape[2]))
 
         # ``is_image_set'', ``input_size'', ``original_size'' have to be overriden to directly use embedings instead of images
         predictor.is_image_set = True
@@ -115,12 +143,16 @@ class ZeroShotSam2D(BasicInferTask):
 
         # SAM uses ``features'' attribute, the same as embeddings
         predictor.features = img_embeddings
-        masks, scores, logits = self.predictor.predict( \
-            point_coords=input_point, \
-            point_labels=input_label, \
-            multimask_output=True )
-        
-        data['pred'] = masks[0]
+        masks, scores, logits = predictor.predict(
+            point_coords=input_point,
+            point_labels=input_label,
+            multimask_output=True)
+
+        output_mask[:, :, data.get('labelSAM', [])[0][2]] = masks[0]
+        data['pred'] = output_mask
+
+        # import matplotlib.image
+        # matplotlib.image.imsave('/home/andres/Downloads/output.png', masks[0])
 
         return data
 
@@ -131,7 +163,8 @@ class ZeroShotSam2D(BasicInferTask):
         ]
 
         self.add_cache_transform(t, data,
-                                 keys=("image", "img_embeddings_axial", "img_embeddings_sagittal", "img_embeddings_coronal"))
+                                 keys=(
+                                 "image", "img_embeddings_axial", "img_embeddings_sagittal", "img_embeddings_coronal"))
 
         # This is when a prompt (click) is provided
         if self.type == InferType.DEEPEDIT:
@@ -158,13 +191,13 @@ class ZeroShotSam2D(BasicInferTask):
 
     def post_transforms(self, data=None) -> Sequence[Callable]:
         return [
-            # EnsureTyped(keys="pred", device=data.get("device") if data else None),
-            ConvertToVolume(keys='pred'),
+            EnsureTyped(keys="pred", device=data.get("device") if data else None),
+            # ConvertToVolume(keys='pred'),
             # Activationsd(keys="pred", sigmoid=True),
             # AsDiscreted(keys="pred", argmax=True),
             # SqueezeDimd(keys="pred", dim=0),
+            # Rotate90d(keys="pred"),
             ToNumpyd(keys="pred"),
-            Rotate90d(keys="pred"),
-            Restored(keys="pred", ref_image="image"),
             ToCheck(keys="image"),
+            Restored(keys="pred", ref_image="image"),
         ]

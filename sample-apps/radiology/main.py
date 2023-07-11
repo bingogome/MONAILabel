@@ -314,7 +314,7 @@ def main():
         for device in device_list():
             # res = app.infer(request={"model": args.model, "image": image_id, "device": device})
             res = app.infer(
-                request={"model": args.model, "image": image_id, "device": device, "labelSAM": [[40, 92, 234]],
+                request={"model": args.model, "image": image_id, "device": device, "labelSAM": [[170, 145, 189]],
                          "background": [], })
             # res = app.infer(
             #     request={"model": "vertebra_pipeline", "image": image_id, "device": device, "slicer": False}

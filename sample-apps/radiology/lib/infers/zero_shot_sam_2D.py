@@ -14,6 +14,8 @@ import logging
 import copy
 
 from monailabel.interfaces.exception import MONAILabelError, MONAILabelException
+from scipy import ndimage
+
 from monai.inferers import Inferer, SimpleInferer
 from monai.transforms import (
     Activationsd,
@@ -99,16 +101,8 @@ class ZeroShotSam2D(BasicInferTask):
         logger.info(f"Inferer:: {device} => {inferer.__class__.__name__} => {inferer.__dict__}")
 
         sam_model = self._get_network(device, data)
-        predictor = SamPredictor(sam_model)
-
-        # TODO: replace hardcode
-        # input_point = np.array([[60, 50]])
-        # input_label = np.array([1])
-        # input_size = (256, 256)
-        # original_size = (256, 256)
 
         input_size = (self.spatial_size[0], self.spatial_size[1])
-        original_size = (self.spatial_size[0], self.spatial_size[1])  # (data['image'].shape[0], data['image'].shape[1])
 
         foreground_points = data.get('labelSAM', [])
         background_points = data.get('background', [])
@@ -117,42 +111,51 @@ class ZeroShotSam2D(BasicInferTask):
 
         # Rescaling the points according the input size
         for idx, point in enumerate(foreground_points):
-            foreground_points[idx][0] = int(point[0] * input_size[0] / data['image'].shape[0])
-            foreground_points[idx][1] = int(point[1] * input_size[1] / data['image'].shape[1])
+            foreground_points[idx][1] = int(point[0] * input_size[0] / data['image'].shape[0])
+            foreground_points[idx][0] = int(point[1] * input_size[1] / data['image'].shape[1])
 
         for idx, point in enumerate(background_points):
-            background_points[idx][0] = int(point[0] * input_size[0] / data['image'].shape[0])
-            background_points[idx][1] = int(point[1] * input_size[1] / data['image'].shape[1])
+            background_points[idx][1] = int(point[0] * input_size[0] / data['image'].shape[0])
+            background_points[idx][0] = int(point[1] * input_size[1] / data['image'].shape[1])
 
         input_point = [fore_point for fore_point in foreground_points]
         input_point.extend([back_point for back_point in background_points])
-        input_point = np.array(input_point)
+        input_point = torch.as_tensor(input_point, dtype=torch.float, device=device)[None]
 
         # Assigning label index
         input_label = [1 for _ in foreground_points]
         input_label.extend([0 for _ in background_points])
-        input_label = np.array(input_label)
+        input_label = torch.as_tensor(input_label, dtype=torch.float, device=device)[None]
 
         output_mask = np.zeros((input_size[0], input_size[1], data['image'].shape[2]))
 
-        # ``is_image_set'', ``input_size'', ``original_size'' have to be overriden to directly use embedings instead of images
-        predictor.is_image_set = True
-        predictor.input_size = input_size
-        predictor.original_size = original_size
         img_embeddings = torch.as_tensor(data['img_embeddings_axial']).to(device)
 
-        # SAM uses ``features'' attribute, the same as embeddings
-        predictor.features = img_embeddings
-        masks, scores, logits = predictor.predict(
-            point_coords=input_point,
-            point_labels=input_label,
-            multimask_output=True)
+        sparse_embeddings, dense_embeddings = sam_model.prompt_encoder(
+            points=(input_point, input_label),
+            boxes=None,
+            masks=None,
+        )
 
-        output_mask[:, :, data.get('labelSAM', [])[0][2]] = masks[0]
+        medsam_seg_prob, _ = sam_model.mask_decoder(
+            image_embeddings=img_embeddings[data.get('labelSAM', [])[0][2]][None],  # (B, 256, 64, 64)
+            image_pe=sam_model.prompt_encoder.get_dense_pe(),  # (1, 256, 64, 64)
+            sparse_prompt_embeddings=sparse_embeddings,  # (B, 2, 256)
+            dense_prompt_embeddings=dense_embeddings,  # (B, 256, 64, 64)
+            multimask_output=False,
+        )
+
+        medsam_seg_prob = torch.sigmoid(medsam_seg_prob)
+        # convert soft mask to hard mask
+        medsam_seg_prob = medsam_seg_prob.detach().cpu().numpy().squeeze()
+        medsam_seg = (medsam_seg_prob > 0.5).astype(np.uint8)
+
+        # medsam_seg = ndimage.rotate(medsam_seg, 90)
+        output_mask[:, :, data.get('labelSAM', [])[0][2]] = medsam_seg
         data['pred'] = output_mask
 
         # import matplotlib.image
-        # matplotlib.image.imsave('/home/andres/Downloads/output.png', masks[0])
+        # matplotlib.image.imsave('/home/andres/Downloads/output.png', medsam_seg)
 
         return data
 
@@ -162,9 +165,11 @@ class ZeroShotSam2D(BasicInferTask):
             LoadEmbeddings(keys="embeddings"),
         ]
 
-        self.add_cache_transform(t, data,
-                                 keys=(
-                                 "image", "img_embeddings_axial", "img_embeddings_sagittal", "img_embeddings_coronal"))
+        # self.add_cache_transform(t, data,
+        #                          keys=(
+        #                          "image", "img_embeddings_axial", "img_embeddings_sagittal", "img_embeddings_coronal"))
+
+        self.add_cache_transform(t, data, keys=("image", "img_embeddings_axial"))
 
         # This is when a prompt (click) is provided
         if self.type == InferType.DEEPEDIT:
@@ -196,6 +201,7 @@ class ZeroShotSam2D(BasicInferTask):
             # Activationsd(keys="pred", sigmoid=True),
             # AsDiscreted(keys="pred", argmax=True),
             # SqueezeDimd(keys="pred", dim=0),
+            # EnsureChannelFirstd(keys="pred"),
             # Rotate90d(keys="pred"),
             ToNumpyd(keys="pred"),
             ToCheck(keys="image"),
